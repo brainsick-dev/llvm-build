@@ -1,0 +1,90 @@
+on:
+  pull_request:
+  push:
+    tags: ['v*.*.*']
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  LLVM_VERSION: 21.1.8
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, ubuntu-24.04, windows-2025-vs2026]
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: write # For creating/uploading the release
+
+    steps:
+      - name: Clone LLVM
+        uses: actions/checkout@v6
+        with:
+          repository: llvm/llvm-project
+          ref: llvmorg-${{ env.LLVM_VERSION }}
+          path: llvm/
+
+      - name: Install LLD (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install lld
+
+      - name: Install LLD (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        run: brew install lld
+
+      - name: Activate MSVC environment
+        if: ${{ runner.os == 'Windows' }}
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: ${{ runner.arch }}
+
+      - name: Build LLVM
+        run: |
+          mkdir build/
+          cd build/
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=lld -DLLVM_TARGETS_TO_BUILD="AArch64;X86" -DLLVM_USE_LINKER=lld ../llvm/llvm/
+          cmake --build ./
+          cmake -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist" -P cmake_install.cmake
+
+      - name: Archive
+        id: archive
+        if: ${{ github.ref_type == 'tag' }}
+        run: |
+          ARCHIVE_FILENAME="$(echo "llvm-${{ runner.os }}-${{ runner.arch }}-v${{ env.LLVM_VERSION }}.tar.zst" |  tr '[:upper:]' '[:lower:]')"
+          tar -c --zstd -f "$ARCHIVE_FILENAME" -C dist/ ./
+          echo "ARCHIVE_FILENAME=$ARCHIVE_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        if: ${{ github.ref_type == 'tag' }}
+        uses: ncipollo/release-action@v1
+        with:
+          draft: true
+          allowUpdates: true
+          updateOnlyUnreleased: true
+          artifacts: ${{ steps.archive.outputs.ARCHIVE_FILENAME }}
+          artifactErrorsFailBuild: true
+
+  publish:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: build
+
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write # For publishing the release
+
+    steps:
+      - name: Publish release
+        uses: ncipollo/release-action@v1
+        with:
+          draft: false
+          allowUpdates: true
+          updateOnlyUnreleased: true
+          body: LLVM v${{ env.LLVM_VERSION }}
