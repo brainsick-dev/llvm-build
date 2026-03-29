@@ -8,7 +8,7 @@ defaults:
     shell: bash
 
 env:
-  LLVM_VERSION: 22.1.1
+  LLVM_VERSION: 22.1.2
 
 jobs:
   build:
